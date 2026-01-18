@@ -5,10 +5,10 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
+    "db:generate": "DATABASE_URL=\"file:./data.db\" prisma generate",
+    "db:push": "DATABASE_URL=\"file:./data.db\" prisma db push",
     "db:seed": "tsx src/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "DATABASE_URL=\"file:./data.db\" prisma studio"
   },
   "dependencies": {
     "@prisma/client": "^5.9.1"

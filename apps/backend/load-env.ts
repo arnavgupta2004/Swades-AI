@@ -12,6 +12,16 @@ const envPath = resolve(projectRoot, '.env');
 console.log('Loading .env from:', envPath);
 const result = config({ path: envPath });
 
+// Resolve DATABASE_URL relative path to absolute path
+if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:')) {
+  const dbPath = process.env.DATABASE_URL.replace(/^file:/, '');
+  if (!dbPath.startsWith('/')) {
+    // Relative path - resolve from project root
+    const absoluteDbPath = resolve(projectRoot, dbPath);
+    process.env.DATABASE_URL = `file:${absoluteDbPath}`;
+  }
+}
+
 if (result.error) {
   console.error('Failed to load .env:', result.error);
 } else {

@@ -23,11 +23,50 @@ export class ChatService {
     this.billingAgent = new BillingAgent();
   }
 
+  /**
+   * Resolve userId - if it's an email, find or create the user and return the actual user ID
+   */
+  private async resolveUserId(userId: string): Promise<string> {
+    // Check if userId looks like an email
+    if (userId.includes('@')) {
+      // Find or create user by email
+      let user = await prisma.user.findUnique({
+        where: { email: userId },
+      });
+
+      if (!user) {
+        // Create user if doesn't exist
+        user = await prisma.user.create({
+          data: {
+            email: userId,
+            name: userId.split('@')[0],
+          },
+        });
+      }
+
+      return user.id;
+    }
+
+    // If it's already a user ID, verify it exists
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new Error(`User with ID ${userId} not found`);
+    }
+
+    return userId;
+  }
+
   async processMessage(
     userId: string,
     conversationId: string | null,
     message: string
   ): Promise<{ response: string; agentType: AgentType; conversationId: string }> {
+    // Resolve userId (handle email addresses)
+    const resolvedUserId = await this.resolveUserId(userId);
+
     // Get or create conversation
     let conversation;
     if (conversationId) {
@@ -42,7 +81,7 @@ export class ChatService {
       const title = message.length > 50 ? message.substring(0, 50) + '...' : message;
       conversation = await prisma.conversation.create({
         data: {
-          userId,
+          userId: resolvedUserId,
           title,
           messages: {
             create: {
@@ -79,29 +118,42 @@ export class ChatService {
     // Route to appropriate agent
     let response;
     
-    if (MOCK_MODE) {
-      // Use mock responses for demo
-      const agentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
-        : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') ? 'BILLING'
-        : 'SUPPORT';
-      response = await MockAgent.getMockResponse(message, agentType);
-    } else {
-      const intent: IntentType = await this.routerAgent.classifyIntent(message);
+    try {
+      if (MOCK_MODE) {
+        // Use mock responses for demo
+        const agentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
+          : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') || message.toLowerCase().includes('billing') ? 'BILLING'
+          : 'SUPPORT';
+        response = await MockAgent.getMockResponse(message, agentType);
+      } else {
+        const intent: IntentType = await this.routerAgent.classifyIntent(message);
 
-      switch (intent) {
-        case 'support':
-          response = await this.supportAgent.process(message, conversationHistory);
-          break;
-        case 'order':
-          response = await this.orderAgent.process(message, conversationHistory);
-          break;
-        case 'billing':
-          response = await this.billingAgent.process(message, conversationHistory);
-          break;
-        default:
-          // Fallback to support agent for unknown intents
-          response = await this.supportAgent.process(message, conversationHistory);
-          response.agentType = 'ROUTER'; // Mark as routed but unclassified
+        switch (intent) {
+          case 'support':
+            response = await this.supportAgent.process(message, conversationHistory);
+            break;
+          case 'order':
+            response = await this.orderAgent.process(message, conversationHistory);
+            break;
+          case 'billing':
+            response = await this.billingAgent.process(message, conversationHistory);
+            break;
+          default:
+            // Fallback to support agent for unknown intents
+            response = await this.supportAgent.process(message, conversationHistory);
+            response.agentType = 'ROUTER'; // Mark as routed but unclassified
+        }
+      }
+    } catch (error: any) {
+      // Check if it's a rate limit error and fall back to mock mode
+      if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('rate limit')) {
+        console.log('[ChatService] Rate limit exceeded, falling back to mock mode');
+        const agentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
+          : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') || message.toLowerCase().includes('billing') ? 'BILLING'
+          : 'SUPPORT';
+        response = await MockAgent.getMockResponse(message, agentType);
+      } else {
+        throw error;
       }
     }
 
@@ -134,6 +186,9 @@ export class ChatService {
     conversationId: string | null,
     message: string
   ): AsyncGenerator<string, void, unknown> {
+    // Resolve userId (handle email addresses)
+    const resolvedUserId = await this.resolveUserId(userId);
+
     // Get or create conversation
     let conversation;
     if (conversationId) {
@@ -147,7 +202,7 @@ export class ChatService {
       const title = message.length > 50 ? message.substring(0, 50) + '...' : message;
       conversation = await prisma.conversation.create({
         data: {
-          userId,
+          userId: resolvedUserId,
           title,
           messages: {
             create: {
@@ -180,39 +235,49 @@ export class ChatService {
       content: msg.content,
     }));
 
-    // Route to appropriate agent and get complete response (handles tools properly)
-    const intent: IntentType = await this.routerAgent.classifyIntent(message);
-    
-    // Determine which agent to use
-    let agent: SupportAgent | OrderAgent | BillingAgent;
-    let agentType: AgentType;
-
-    switch (intent) {
-      case 'support':
-        agent = this.supportAgent;
-        agentType = 'SUPPORT';
-        break;
-      case 'order':
-        agent = this.orderAgent;
-        agentType = 'ORDER';
-        break;
-      case 'billing':
-        agent = this.billingAgent;
-        agentType = 'BILLING';
-        break;
-      default:
-        agent = this.supportAgent;
-        agentType = 'ROUTER';
-    }
-
     // Get the full response from agent (this properly handles tool calls)
     let fullResponse = '';
+    let agentType: AgentType;
 
     try {
-      console.log(`[ChatService] Routing to ${agentType} agent`);
-      const agentResponse = await agent.process(message, conversationHistory);
-      fullResponse = agentResponse.content;
-      agentType = agentResponse.agentType;
+      if (MOCK_MODE) {
+        // Use mock responses for demo
+        const mockAgentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
+          : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') || message.toLowerCase().includes('billing') ? 'BILLING'
+          : 'SUPPORT';
+        const mockResponse = await MockAgent.getMockResponse(message, mockAgentType);
+        fullResponse = mockResponse.content;
+        agentType = mockResponse.agentType;
+      } else {
+        // Route to appropriate agent and get complete response (handles tools properly)
+        const intent: IntentType = await this.routerAgent.classifyIntent(message);
+        
+        // Determine which agent to use
+        let agent: SupportAgent | OrderAgent | BillingAgent;
+
+        switch (intent) {
+          case 'support':
+            agent = this.supportAgent;
+            agentType = 'SUPPORT';
+            break;
+          case 'order':
+            agent = this.orderAgent;
+            agentType = 'ORDER';
+            break;
+          case 'billing':
+            agent = this.billingAgent;
+            agentType = 'BILLING';
+            break;
+          default:
+            agent = this.supportAgent;
+            agentType = 'ROUTER';
+        }
+
+        console.log(`[ChatService] Routing to ${agentType} agent`);
+        const agentResponse = await agent.process(message, conversationHistory);
+        fullResponse = agentResponse.content;
+        agentType = agentResponse.agentType;
+      }
       
       // Stream the response word by word for a better UX
       const words = fullResponse.split(' ');
@@ -237,15 +302,53 @@ export class ChatService {
         where: { id: conversation.id },
         data: { updatedAt: new Date() },
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Streaming error:', error);
-      throw error;
+      
+      // Check if it's a rate limit error and fall back to mock mode
+      if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('rate limit')) {
+        console.log('[ChatService] Rate limit exceeded, falling back to mock mode');
+        const mockAgentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
+          : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') || message.toLowerCase().includes('billing') ? 'BILLING'
+          : 'SUPPORT';
+        const mockResponse = await MockAgent.getMockResponse(message, mockAgentType);
+        fullResponse = mockResponse.content;
+        agentType = mockResponse.agentType;
+        
+        // Stream the mock response
+        const words = fullResponse.split(' ');
+        for (let i = 0; i < words.length; i++) {
+          const word = i === words.length - 1 ? words[i] : words[i] + ' ';
+          yield word;
+          await new Promise(resolve => setTimeout(resolve, 30));
+        }
+
+        // Save the mock response
+        await prisma.message.create({
+          data: {
+            conversationId: conversation.id,
+            role: 'ASSISTANT',
+            content: fullResponse,
+            agentType,
+          },
+        });
+
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { updatedAt: new Date() },
+        });
+      } else {
+        throw error;
+      }
     }
   }
 
   async getConversations(userId: string) {
+    // Resolve userId (handle email addresses)
+    const resolvedUserId = await this.resolveUserId(userId);
+    
     return prisma.conversation.findMany({
-      where: { userId },
+      where: { userId: resolvedUserId },
       include: {
         messages: {
           orderBy: { createdAt: 'desc' },
@@ -260,6 +363,9 @@ export class ChatService {
   }
 
   async getConversation(conversationId: string, userId: string) {
+    // Resolve userId (handle email addresses)
+    const resolvedUserId = await this.resolveUserId(userId);
+    
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -269,7 +375,7 @@ export class ChatService {
       },
     });
 
-    if (!conversation || conversation.userId !== userId) {
+    if (!conversation || conversation.userId !== resolvedUserId) {
       return null;
     }
 
@@ -277,11 +383,14 @@ export class ChatService {
   }
 
   async deleteConversation(conversationId: string, userId: string) {
+    // Resolve userId (handle email addresses)
+    const resolvedUserId = await this.resolveUserId(userId);
+    
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
     });
 
-    if (!conversation || conversation.userId !== userId) {
+    if (!conversation || conversation.userId !== resolvedUserId) {
       return false;
     }
 
