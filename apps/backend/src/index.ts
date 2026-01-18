@@ -1,28 +1,4 @@
-import { config } from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
-
-// Load .env from project root FIRST, before any other imports
-// When running from apps/backend/src, go up 3 levels to project root
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const projectRoot = resolve(__dirname, '../../..');
-const envPath = resolve(projectRoot, '.env');
-config({ path: envPath });
-
-// Also try loading from current working directory as fallback
-if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'your-openai-api-key-here') {
-  config({ path: resolve(process.cwd(), '.env') });
-}
-
-// Fix DATABASE_URL if it's a relative path - MUST be done before Prisma imports!
-if (process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('file:./')) {
-  const dbPath = process.env.DATABASE_URL.replace('file:./', '');
-  const absoluteDbPath = resolve(projectRoot, dbPath);
-  process.env.DATABASE_URL = `file:${absoluteDbPath}`;
-  console.log('📁 Database path resolved to:', process.env.DATABASE_URL);
-}
-
+// Environment variables are loaded by load-env.ts before this file runs
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';

@@ -2,10 +2,9 @@
 
 ## Prerequisites
 
-1. **PostgreSQL** - Make sure PostgreSQL is installed and running
-2. **Node.js 18+** - Install Node.js from nodejs.org
-3. **pnpm** - Install pnpm: `npm install -g pnpm`
-4. **OpenAI API Key** - Get from https://platform.openai.com/api-keys
+1. **Node.js 18+** - Install Node.js from nodejs.org
+2. **pnpm** - Install pnpm: `npm install -g pnpm`
+3. **Google Gemini API Key** - Get free key from https://makersuite.google.com/app/apikey
 
 ## Setup Steps
 
@@ -20,12 +19,25 @@ pnpm install
 Create a `.env` file in the root directory:
 
 ```env
-DATABASE_URL="postgresql://user:password@localhost:5432/swades_ai?schema=public"
-OPENAI_API_KEY="your-openai-api-key-here"
+# Database - SQLite (auto-created)
+DATABASE_URL="file:./packages/db/prisma/data.db"
+
+# AI - Get free key at https://makersuite.google.com/app/apikey
+GEMINI_API_KEY="your-gemini-api-key-here"
+
+# Optional: Enable mock mode for testing without API
+MOCK_MODE="false"
+
 PORT=3000
 NODE_ENV=development
 FRONTEND_URL="http://localhost:5173"
 ```
+
+**How to get your free Gemini API key:**
+1. Visit https://makersuite.google.com/app/apikey
+2. Sign in with Google
+3. Click "Create API Key"
+4. Copy and paste into `.env`
 
 ### 3. Setup Database
 
@@ -80,17 +92,16 @@ pnpm dev
 
 ## Troubleshooting
 
-### Database Connection Issues
+### Database Issues
 
-- Make sure PostgreSQL is running: `pg_isready`
-- Check your `DATABASE_URL` format
-- Ensure the database exists: `createdb swades_ai` (if needed)
+- The SQLite database is auto-created in `packages/db/prisma/data.db`
+- If issues occur, delete `data.db` and run `pnpm db:push` again
 
-### OpenAI API Issues
+### Gemini API Issues
 
-- Verify your API key is correct
-- Check your OpenAI account has credits
-- Ensure the API key has access to GPT-4
+- Verify your API key is correct (from https://makersuite.google.com/app/apikey)
+- Gemini has a generous free tier (no credit card needed)
+- If you hit rate limits, enable mock mode: `MOCK_MODE="true"` in `.env`
 
 ### Port Already in Use
 

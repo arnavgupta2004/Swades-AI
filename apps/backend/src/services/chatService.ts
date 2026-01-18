@@ -1,10 +1,14 @@
 import prisma from '@swades-ai/db';
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { RouterAgent, IntentType } from './agents/routerAgent';
 import { SupportAgent } from './agents/supportAgent';
 import { OrderAgent } from './agents/orderAgent';
 import { BillingAgent } from './agents/billingAgent';
+import { MockAgent } from './agents/mockAgent';
 import type { AgentType } from '@swades-ai/db';
+
+// Enable mock mode if API quota is exceeded or for demo purposes
+const MOCK_MODE = process.env.MOCK_MODE === 'true';
 
 export class ChatService {
   private routerAgent: RouterAgent;
@@ -73,23 +77,32 @@ export class ChatService {
     }));
 
     // Route to appropriate agent
-    const intent: IntentType = await this.routerAgent.classifyIntent(message);
     let response;
+    
+    if (MOCK_MODE) {
+      // Use mock responses for demo
+      const agentType: AgentType = message.toLowerCase().includes('order') ? 'ORDER' 
+        : message.toLowerCase().includes('invoice') || message.toLowerCase().includes('refund') ? 'BILLING'
+        : 'SUPPORT';
+      response = await MockAgent.getMockResponse(message, agentType);
+    } else {
+      const intent: IntentType = await this.routerAgent.classifyIntent(message);
 
-    switch (intent) {
-      case 'support':
-        response = await this.supportAgent.process(message, conversationHistory);
-        break;
-      case 'order':
-        response = await this.orderAgent.process(message, conversationHistory);
-        break;
-      case 'billing':
-        response = await this.billingAgent.process(message, conversationHistory);
-        break;
-      default:
-        // Fallback to support agent for unknown intents
-        response = await this.supportAgent.process(message, conversationHistory);
-        response.agentType = 'ROUTER'; // Mark as routed but unclassified
+      switch (intent) {
+        case 'support':
+          response = await this.supportAgent.process(message, conversationHistory);
+          break;
+        case 'order':
+          response = await this.orderAgent.process(message, conversationHistory);
+          break;
+        case 'billing':
+          response = await this.billingAgent.process(message, conversationHistory);
+          break;
+        default:
+          // Fallback to support agent for unknown intents
+          response = await this.supportAgent.process(message, conversationHistory);
+          response.agentType = 'ROUTER'; // Mark as routed but unclassified
+      }
     }
 
     // Save assistant response
@@ -167,7 +180,7 @@ export class ChatService {
       content: msg.content,
     }));
 
-    // Route to appropriate agent
+    // Route to appropriate agent and get complete response (handles tools properly)
     const intent: IntentType = await this.routerAgent.classifyIntent(message);
     
     // Determine which agent to use
@@ -192,52 +205,22 @@ export class ChatService {
         agentType = 'ROUTER';
     }
 
-    // Use the agent's process method, but we need to implement streaming differently
-    // For now, we'll use a simplified streaming approach
-    const systemPrompt = agent['getSystemPrompt']();
-    const tools = agent['getTools']();
-    
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
-    // Build messages
-    const messages: any[] = [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory,
-      { role: 'user', content: message },
-    ];
-
-    // Stream the response
+    // Get the full response from agent (this properly handles tool calls)
     let fullResponse = '';
 
     try {
-      const stream = await client.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages,
-        tools: tools.length > 0 ? tools.map(tool => ({
-          type: 'function',
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
-        })) : undefined,
-        stream: true,
-        temperature: 0.7,
-      });
-
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content;
-        if (content) {
-          fullResponse += content;
-          yield content;
-        }
-
-        // Handle tool calls if needed (simplified - would need more complex handling)
-        if (chunk.choices[0]?.delta?.tool_calls) {
-          // Tool calls need special handling in streaming - for now, skip
-        }
+      console.log(`[ChatService] Routing to ${agentType} agent`);
+      const agentResponse = await agent.process(message, conversationHistory);
+      fullResponse = agentResponse.content;
+      agentType = agentResponse.agentType;
+      
+      // Stream the response word by word for a better UX
+      const words = fullResponse.split(' ');
+      for (let i = 0; i < words.length; i++) {
+        const word = i === words.length - 1 ? words[i] : words[i] + ' ';
+        yield word;
+        // Small delay to simulate streaming
+        await new Promise(resolve => setTimeout(resolve, 30));
       }
 
       // Save the complete response

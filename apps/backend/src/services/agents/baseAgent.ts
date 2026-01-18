@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { AgentType } from '@swades-ai/db';
 
 export interface AgentTool {
@@ -18,19 +18,17 @@ export interface AgentResponse {
 }
 
 export abstract class BaseAgent {
-  protected openai: OpenAI;
+  protected genAI: GoogleGenerativeAI;
   protected agentType: AgentType;
 
   constructor(agentType: AgentType) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey || apiKey === 'your-openai-api-key-here') {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your-gemini-api-key-here') {
       throw new Error(
-        'OPENAI_API_KEY is missing or not set. Please set it in your .env file.'
+        'GEMINI_API_KEY is missing or not set. Please set it in your .env file. Get a free key at https://makersuite.google.com/app/apikey'
       );
     }
-    this.openai = new OpenAI({
-      apiKey,
-    });
+    this.genAI = new GoogleGenerativeAI(apiKey);
     this.agentType = agentType;
   }
 
@@ -46,70 +44,89 @@ export abstract class BaseAgent {
     conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
     toolResults?: Record<string, any>
   ): Promise<AgentResponse> {
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      {
-        role: 'system',
-        content: this.getSystemPrompt(),
-      },
-      ...conversationHistory.map((msg) => ({
-        role: msg.role,
-        content: msg.content,
-      })),
-      {
-        role: 'user',
-        content: userMessage,
-      },
-    ];
+    try {
+      const systemPrompt = this.getSystemPrompt();
+      const tools = this.getTools();
 
-    // Include tool results if available
-    if (toolResults) {
-      for (const [toolName, result] of Object.entries(toolResults)) {
-        messages.push({
-          role: 'tool',
-          content: JSON.stringify(result),
-          tool_call_id: toolName,
-        } as any);
-      }
-    }
-
-    const tools = this.getTools();
-    const response = await this.openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
-      messages,
-      tools: tools.length > 0 ? tools.map(tool => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
+      // Convert tools to Gemini format
+      const geminiTools = tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object',
+          properties: tool.parameters.properties,
+          required: tool.parameters.required,
         },
-      })) : undefined,
-      tool_choice: tools.length > 0 ? 'auto' : undefined,
-      temperature: 0.7,
-    });
+      }));
 
-    const message = response.choices[0]?.message;
-    if (!message) {
-      throw new Error('No response from agent');
-    }
+      // Build conversation history for Gemini
+      const chatHistory = conversationHistory.map((msg) => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }],
+      }));
 
-    // Handle tool calls
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      const toolResults: Record<string, any> = {};
+      // Create model with or without tools
+      const model = this.genAI.getGenerativeModel({
+        model: 'gemini-3-flash-preview',
+        systemInstruction: systemPrompt,
+        ...(geminiTools.length > 0 && {
+          tools: [{ functionDeclarations: geminiTools }],
+        }),
+      });
+
+      const chat = model.startChat({
+        history: chatHistory,
+      });
+
+      console.log(`[${this.agentType}] Processing message:`, userMessage);
+      const result = await chat.sendMessage(userMessage);
+      const response = result.response;
+
+      // Check for function calls
+      const functionCalls = response.functionCalls();
+      console.log(`[${this.agentType}] Function calls:`, functionCalls?.length || 0);
       
-      for (const toolCall of message.tool_calls) {
-        const toolName = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments);
-        toolResults[toolCall.id] = await this.callTool(toolName, args);
+      if (functionCalls && functionCalls.length > 0) {
+        const toolResults: any[] = [];
+
+        for (const functionCall of functionCalls) {
+          const toolName = functionCall.name;
+          const args = functionCall.args;
+          console.log(`[${this.agentType}] Calling tool: ${toolName}`, args);
+          
+          const toolResult = await this.callTool(toolName, args);
+          console.log(`[${this.agentType}] Tool result:`, toolResult);
+
+          toolResults.push({
+            functionResponse: {
+              name: toolName,
+              response: toolResult,
+            },
+          });
+        }
+
+        // Send tool results back to the model
+        console.log(`[${this.agentType}] Sending tool results back to model`);
+        const finalResult = await chat.sendMessage(toolResults);
+        const finalText = finalResult.response.text();
+        console.log(`[${this.agentType}] Final response:`, finalText?.substring(0, 100));
+        
+        return {
+          content: finalText || '',
+          agentType: this.agentType,
+        };
       }
 
-      // Call again with tool results
-      return this.process(userMessage, conversationHistory, toolResults);
+      const text = response.text();
+      console.log(`[${this.agentType}] Direct response:`, text?.substring(0, 100));
+      
+      return {
+        content: text || '',
+        agentType: this.agentType,
+      };
+    } catch (error) {
+      console.error(`[${this.agentType}] Error processing message:`, error);
+      throw error;
     }
-
-    return {
-      content: message.content || '',
-      agentType: this.agentType,
-    };
   }
 }

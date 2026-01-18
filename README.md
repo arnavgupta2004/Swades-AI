@@ -50,9 +50,9 @@ This project follows a **monorepo structure** using Turborepo and implements:
 ### Backend
 - **Hono.dev** - Fast web framework
 - **Hono RPC** - Type-safe API (monorepo setup)
-- **PostgreSQL** - Database
+- **SQLite** - Database (via Prisma)
 - **Prisma** - ORM
-- **OpenAI GPT-4** - AI model via Vercel AI SDK patterns
+- **Google Gemini 1.5 Flash** - Free AI model for intelligent responses
 
 ### Infrastructure
 - **Turborepo** - Monorepo management
@@ -89,8 +89,7 @@ swades-ai/
 ### Prerequisites
 
 - **Node.js** 18+ and **pnpm** 8+
-- **PostgreSQL** database
-- **OpenAI API Key**
+- **Google Gemini API Key** (free at https://makersuite.google.com/app/apikey)
 
 ### Installation
 
@@ -109,11 +108,14 @@ swades-ai/
 
    Create a `.env` file in the root directory:
    ```env
-   # Database
-   DATABASE_URL="postgresql://user:password@localhost:5432/swades_ai?schema=public"
+   # Database - Using SQLite (auto-created)
+   DATABASE_URL="file:./packages/db/prisma/data.db"
 
-   # AI
-   OPENAI_API_KEY="your-openai-api-key-here"
+   # AI - Get free API key at https://makersuite.google.com/app/apikey
+   GEMINI_API_KEY="your-gemini-api-key-here"
+
+   # Mock mode (set to "true" to use mock responses without API calls)
+   MOCK_MODE="false"
 
    # Server
    PORT=3000
@@ -122,6 +124,12 @@ swades-ai/
    # CORS
    FRONTEND_URL="http://localhost:5173"
    ```
+
+   **Get your free Gemini API key:**
+   1. Visit https://makersuite.google.com/app/apikey
+   2. Sign in with your Google account
+   3. Click "Create API Key"
+   4. Copy the key and paste it in `.env`
 
 4. **Set up the database**
    ```bash
